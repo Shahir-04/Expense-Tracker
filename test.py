@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 import os
-import sqlite3
-
-DB_PATH=os.path.join(os.path.dirname(__file__),'expense.db')
-
+import aiosqlite 
+import tempfile
+TEMP_DIR = tempfile.gettempdir()
+DB_PATH = os.path.join(TEMP_DIR, "expenses.db")
 
 app=FastAPI()
 def init_db():
@@ -31,18 +31,38 @@ def init_db():
         raise
 init_db()
 @app.post('/add-expense')
-def add_expense(date,amount,category,subcategory="",note=""):
-    """ Adds expenses to the database"""
-    with sqlite3.connect(DB_PATH) as c:
-        cur=c.execute("INSERT INTO expenses (date, amount, category, subcategory, note) VALUES(?,?,?,?,?)",
-        (date, amount, category, subcategory, note))
-        return{"status": "ok","id":cur.lastrowid}
+async def add_expense(date, amount, category, subcategory="", note=""):  # Changed: added async
+    '''Add a new expense entry to the database.'''
+    try:
+        async with aiosqlite.connect(DB_PATH) as c:  # Changed: added async
+            cur = await c.execute(  # Changed: added await
+                "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (?,?,?,?,?)",
+                (date, amount, category, subcategory, note)
+            )
+            expense_id = cur.lastrowid
+            await c.commit()  # Changed: added await
+            return {"status": "success", "id": expense_id, "message": "Expense added successfully"}
+    except Exception as e:  # Changed: simplified exception handling
+        if "readonly" in str(e).lower():
+            return {"status": "error", "message": "Database is in read-only mode. Check file permissions."}
+        return {"status": "error", "message": f"Database error: {str(e)}"}
 
 
 @app.get('/list-expense')
-def list_expense():
-    """ List all expenses from the database"""
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute ("SELECT id, date, amount, category, subcategory, note FROM expenses ORDER BY id ASC")
-        cols=[d[0] for d in cur.description]
-        return[dict(zip(cols,r)) for r in cur.fetchall()]
+async def list_expenses(start_date, end_date):  # Changed: added async
+    '''List expense entries within an inclusive date range.'''
+    try:
+        async with aiosqlite.connect(DB_PATH) as c:  # Changed: added async
+            cur = await c.execute(  # Changed: added await
+                """
+                SELECT id, date, amount, category, subcategory, note
+                FROM expenses
+                WHERE date BETWEEN ? AND ?
+                ORDER BY date DESC, id DESC
+                """,
+                (start_date, end_date)
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in await cur.fetchall()]  # Changed: added await
+    except Exception as e:
+        return {"status": "error", "message": f"Error listing expenses: {str(e)}"}
